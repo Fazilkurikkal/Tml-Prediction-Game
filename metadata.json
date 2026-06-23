@@ -1,0 +1,6 @@
+{
+  "name": "TML Brothers Prediction Game",
+  "description": "A premium FIFA World Cup prediction game featuring a responsive participant dashboard, real-time points scoring engine, live interactive leaderboards, and an administrative panel for official match score updates.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

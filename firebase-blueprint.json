@@ -1,0 +1,99 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User account settings and accumulated scoring stats",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "totalPoints": { "type": "integer" },
+        "exactScoresCount": { "type": "integer" },
+        "correctOutcomesCount": { "type": "integer" },
+        "isAdmin": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "totalPoints"]
+    },
+    "Match": {
+      "title": "Match",
+      "description": "Information about a World Cup soccer match",
+      "type": "object",
+      "properties": {
+        "matchId": { "type": "string" },
+        "homeTeam": { "type": "string" },
+        "awayTeam": { "type": "string" },
+        "homeScore": { "type": "integer" },
+        "awayScore": { "type": "integer" },
+        "stage": { "type": "string" },
+        "kickoffTime": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["Open", "Locked", "Finished", "Cancelled"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["matchId", "homeTeam", "awayTeam", "stage", "kickoffTime", "status"]
+    },
+    "Prediction": {
+      "title": "Prediction",
+      "description": "A user's prediction score for a specific match",
+      "type": "object",
+      "properties": {
+        "predictionId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "displayName": { "type": "string" },
+        "matchId": { "type": "string" },
+        "homePredicted": { "type": "integer" },
+        "awayPredicted": { "type": "integer" },
+        "pointsAwarded": { "type": "integer" },
+        "status": { "type": "string", "enum": ["Pending", "ExactCorrect", "WinnerCorrect", "Incorrect"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["predictionId", "userId", "matchId", "homePredicted", "awayPredicted", "status"]
+    },
+    "AdminRecord": {
+      "title": "Admin Record",
+      "description": "Designated users with admin privileges",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" }
+      },
+      "required": ["email"]
+    },
+    "Credential": {
+      "title": "Credential Record",
+      "description": "Secure storage mapping custom registration numbers to passwords and user profile IDs",
+      "type": "object",
+      "properties": {
+        "number": { "type": "string" },
+        "password": { "type": "string" },
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["number", "password", "userId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and accumulated ranking points"
+    },
+    "/matches/{matchId}": {
+      "schema": "Match",
+      "description": "Authorized list of tournament matches and official final scores"
+    },
+    "/predictions/{predictionId}": {
+      "schema": "Prediction",
+      "description": "Predictions tied to user-match pairs. predictionId is userId_matchId"
+    },
+    "/admins/{userId}": {
+      "schema": "AdminRecord",
+      "description": "Designated users with admin privileges"
+    },
+    "/credentials/{number}": {
+      "schema": "Credential",
+      "description": "Mapping from custom login numbers to passwords and user profiles"
+    }
+  }
+}

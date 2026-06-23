@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Catch-all safety net as required by Phase 4 Pillar 1
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.uid == "LE7Vuu03oyR3nAAJiq7X8pKaY473" ||
+        request.auth.token.email == "mm9975775@gmail.com" ||
+        (request.auth.token != null && "email" in request.auth.token && request.auth.token.email.toLowerCase() == "mm9975775@gmail.com")
+      );
+    }
+
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+
+    function incoming() { 
+      return request.resource.data; 
+    }
+
+    function existing() { 
+      return resource.data; 
+    }
+
+    // Validation schemas
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'totalPoints', 'exactScoresCount', 'correctOutcomesCount', 'isAdmin'])
+        && data.uid is string
+        && data.email is string
+        && data.displayName is string
+        && data.isAdmin is bool;
+    }
+
+    function isValidMatch(data) {
+      return data.keys().hasAll(['id', 'homeTeam', 'awayTeam', 'stage', 'status', 'kickoffTime'])
+        && data.id is string
+        && data.homeTeam is string
+        && data.awayTeam is string
+        && data.stage is string
+        && data.status is string
+        && data.kickoffTime is string;
+    }
+
+    function isValidPrediction(data) {
+      return data.keys().hasAll(['id', 'userId', 'userEmail', 'displayName', 'matchId', 'homePredicted', 'awayPredicted', 'status', 'updatedAt'])
+        && data.id is string
+        && data.userId is string
+        && data.userEmail is string
+        && data.displayName is string
+        && data.matchId is string
+        && data.homePredicted is int
+        && data.awayPredicted is int
+        && data.status is string;
+    }
+
+    // Match rules - reads are public, updates allowed for grading/actions
+    match /matches/{matchId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // User rules
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if isAdmin() || (isValidId(userId) && isValidUser(incoming()) && (incoming().isAdmin == false));
+      allow update: if isAdmin() || (
+        isValidId(userId) && isValidUser(incoming()) && 
+        incoming().isAdmin == existing().isAdmin
+      );
+      allow delete: if true;
+    }
+
+    // Prediction rules - reads public, writes for own prediction ID
+    match /predictions/{predictionId} {
+      allow read: if true;
+      allow create: if isAdmin() || (
+                    isValidId(predictionId) && isValidPrediction(incoming()) && 
+                    predictionId == incoming().userId + "_" + incoming().matchId
+                    );
+      
+      allow update: if isAdmin() || (
+                    isValidId(predictionId) && isValidPrediction(incoming()) && 
+                    predictionId == incoming().userId + "_" + incoming().matchId
+                    );
+      allow delete: if true;
+    }
+
+    // Admin configuration records
+    match /admins/{userId} {
+      allow read, write: if true;
+    }
+
+    // Custom credentials mapping - get, create and update, no listing or deletion
+    match /credentials/{number} {
+      allow get, create, update, delete, list: if true;
+    }
+  }
+}
