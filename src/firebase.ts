@@ -4,7 +4,7 @@
 
 import { initializeApp, getApp, getApps } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
-import { getFirestore, Firestore, doc, getDocFromServer } from 'firebase/firestore';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, Firestore, doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 export enum OperationType {
@@ -48,7 +48,7 @@ if (!isPlaceholderKey) {
     } else {
       firebaseApp = getApp();
     }
-    // Set up standard Services
+    // Set up standard Services with standard robust caching
     db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
     auth = getAuth(firebaseApp);
     isFirebaseSupported = true;
@@ -57,15 +57,18 @@ if (!isPlaceholderKey) {
     const testConnection = async () => {
       try {
         if (db) {
-          await getDocFromServer(doc(db, 'test', 'connection'));
+          const docRef = doc(db, 'test', 'connection');
+          await getDocFromServer(docRef).catch(err => {
+            console.warn("Firebase doc fetch offline / warning:", err);
+          });
         }
       } catch (error) {
-        if (error instanceof Error && error.message.includes('the client is offline')) {
-          console.warn("Firebase client appears to be offline. Verify your credentials.");
-        }
+        console.warn("Firebase client offline warning safely caught:", error);
       }
     };
-    testConnection();
+    testConnection().catch(err => {
+      console.warn("Firebase connection tester promise warning caught:", err);
+    });
   } catch (error) {
     console.error("Firebase failed to initialize. Falling back to Local Sandbox mode.", error);
     isFirebaseSupported = false;

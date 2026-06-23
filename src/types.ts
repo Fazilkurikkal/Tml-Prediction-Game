@@ -65,4 +65,5 @@ export interface UserProfile {
   correctOutcomesCount: number;
   isAdmin: boolean;
   updatedAt?: string;
+  rank?: number;
 }

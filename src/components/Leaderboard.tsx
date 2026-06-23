@@ -15,10 +15,12 @@ export const Leaderboard: React.FC = () => {
   const [extraMatches, setExtraMatches] = useState<{ [id: string]: Match }>({});
 
   // Filter leaderboard based on search term
-  const filteredLeaderboard = leaderboard.filter(player => 
-    player.displayName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    player.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredLeaderboard = leaderboard.filter(player => {
+    const displayName = player?.displayName || '';
+    const email = player?.email || '';
+    return displayName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+           email.toLowerCase().includes(searchTerm.toLowerCase());
+  });
 
   // Generate ranking trophy icon/colored circle
   const getRankBadge = (index: number) => {
@@ -247,12 +249,12 @@ export const Leaderboard: React.FC = () => {
                           <div className="flex items-center gap-1.5 font-semibold text-white text-xs md:text-sm">
                             <span className="truncate max-w-[140px] md:max-w-xs">{player.displayName}</span>
                             {isMe && (
-                              <span className="text-[9px] bg-amber-500/10 text-amber-500 border border-amber-500/20 px-1.5 py-0.2 rounded font-bold uppercase tracking-wider">
+                              <span className="text-[9px] bg-amber-500/10 text-amber-500 border border-amber-500/20 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">
                                 ME
                               </span>
                             )}
                             {player.isAdmin && (
-                              <span className="text-[9px] bg-indigo-950/40 text-indigo-400 border border-indigo-500/10 px-1.5 py-0.2 rounded font-bold uppercase tracking-wider">
+                              <span className="text-[9px] bg-indigo-950/40 text-indigo-400 border border-indigo-500/10 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">
                                 Admin
                               </span>
                             )}
@@ -380,7 +382,7 @@ export const Leaderboard: React.FC = () => {
                           }`}
                         >
                           <div className="flex items-center justify-between text-[10px] text-slate-500">
-                            <span className="font-mono bg-slate-950 px-1.5 py-0.2 rounded text-[9px]">{matchDetails.stage}</span>
+                            <span className="font-mono bg-slate-950 px-1.5 py-0.5 rounded text-[9px]">{matchDetails.stage}</span>
                             <span className="text-slate-400 font-bold uppercase">{matchDetails.homeTeam} vs {matchDetails.awayTeam}</span>
                           </div>
 

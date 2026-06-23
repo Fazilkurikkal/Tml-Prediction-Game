@@ -104,5 +104,11 @@ service cloud.firestore {
     match /credentials/{number} {
       allow get, create, update, delete, list: if true;
     }
+
+    // Leaderboard collection rules
+    match /leaderboard/{userId} {
+      allow read: if true;
+      allow write: if true;
+    }
   }
 }

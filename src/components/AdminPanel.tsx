@@ -4,37 +4,39 @@ import { MatchStatus, Match, MatchStage, Prediction } from '../types';
 import { ShieldCheck, PlusCircle, RotateCcw, AlertTriangle, HelpCircle, Save, CheckCircle, Database, Trash2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { db } from '../firebase';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 
 export const AdminPanel: React.FC = () => {
   const { currentUser, matches, predictions, leaderboard, updateMatchScore, clearMatchPoints, addMatch, clearAllMatches, seedInitialData, isFirebase } = useGame();
   
-  // Local state to load all user predictions for administrative overview
-  const [adminPredictions, setAdminPredictions] = useState<Prediction[]>([]);
+  // Local state directory of predictions mapped by matchId (Optimized!)
+  const [matchPredictions, setMatchPredictions] = useState<{ [matchId: string]: Prediction[] }>({});
   const [isLoadingPreds, setIsLoadingPreds] = useState<boolean>(false);
 
-  const fetchAdminPredictions = () => {
+  const fetchPredictionsForMatch = (matchId: string) => {
     if (isFirebase && db) {
       setIsLoadingPreds(true);
-      getDocs(collection(db, 'predictions')).then(snap => {
+      const q = query(collection(db, 'predictions'), where('matchId', '==', matchId));
+      getDocs(q).then(snap => {
         const list: Prediction[] = [];
         snap.forEach(doc => {
           list.push({ id: doc.id, ...doc.data() } as Prediction);
         });
-        setAdminPredictions(list);
+        setMatchPredictions(prev => ({
+          ...prev,
+          [matchId]: list
+        }));
         setIsLoadingPreds(false);
       }).catch(err => {
-        console.error("Error loading predictions for admin panel:", err);
+        console.error(`Error loading predictions for match ${matchId}:`, err);
         setIsLoadingPreds(false);
       });
     }
   };
 
-  useEffect(() => {
-    fetchAdminPredictions();
-  }, [isFirebase]);
-
-  const activePredictions = isFirebase ? adminPredictions : predictions;
+  const getMatchPreds = (matchId: string): Prediction[] => {
+    return isFirebase ? (matchPredictions[matchId] || []) : predictions.filter(p => p.matchId === matchId);
+  };
 
   // Local state for tracking collapsible predictions lists
   const [expandedPredictions, setExpandedPredictions] = useState<{ [matchId: string]: boolean }>({});
@@ -42,9 +44,13 @@ export const AdminPanel: React.FC = () => {
   const [confirmClearPoints, setConfirmClearPoints] = useState<{ [matchId: string]: boolean }>({});
   
   const togglePredictionsExpand = (matchId: string) => {
+    const nextState = !expandedPredictions[matchId];
+    if (nextState && !matchPredictions[matchId] && isFirebase) {
+      fetchPredictionsForMatch(matchId);
+    }
     setExpandedPredictions(prev => ({
       ...prev,
-      [matchId]: !prev[matchId]
+      [matchId]: nextState
     }));
   };
 
@@ -199,7 +205,7 @@ export const AdminPanel: React.FC = () => {
     try {
       await updateMatchScore(matchId, homeNum, awayNum, editState.status, editState.shootoutWinner || null);
       setSuccessMsg(prev => ({ ...prev, [matchId]: 'Successfully published changes to the database!' }));
-      fetchAdminPredictions();
+      fetchPredictionsForMatch(matchId);
       setTimeout(() => {
         setSuccessMsg(prev => ({ ...prev, [matchId]: '' }));
       }, 3000);
@@ -228,7 +234,7 @@ export const AdminPanel: React.FC = () => {
       await clearMatchPoints(matchId);
       
       setSuccessMsg(prev => ({ ...prev, [matchId]: 'Match details and points cleared successfully!' }));
-      fetchAdminPredictions();
+      fetchPredictionsForMatch(matchId);
       setTimeout(() => {
         setSuccessMsg(prev => ({ ...prev, [matchId]: '' }));
       }, 3000);
@@ -261,7 +267,7 @@ export const AdminPanel: React.FC = () => {
     try {
       await seedInitialData();
       setSeedSuccess(true);
-      fetchAdminPredictions();
+      setMatchPredictions({});
       setTimeout(() => setSeedSuccess(false), 5000);
     } catch (err: any) {
       console.error(err);
@@ -279,7 +285,7 @@ export const AdminPanel: React.FC = () => {
       await clearAllMatches();
       setClearSuccess(true);
       setShowClearConfirm(false);
-      fetchAdminPredictions();
+      setMatchPredictions({});
       setTimeout(() => setClearSuccess(false), 5500);
     } catch (err: any) {
       console.error(err);
@@ -642,7 +648,7 @@ export const AdminPanel: React.FC = () => {
                 {/* Match Information summary details */}
                 <div className="flex flex-col gap-1.5 lg:w-1/3">
                   <div className="flex items-center gap-2">
-                    <span className="text-[9px] bg-slate-800 text-slate-300 font-mono font-bold px-1.5 py-0.2 rounded">
+                    <span className="text-[9px] bg-slate-800 text-slate-300 font-mono font-bold px-1.5 py-0.5 rounded">
                       {match.stage}
                     </span>
                     <span className={`text-[9px] font-bold uppercase tracking-wider ${
@@ -673,7 +679,7 @@ export const AdminPanel: React.FC = () => {
                       <div className="flex items-center justify-between text-[11px] gap-2">
                         <span className="text-slate-400 font-medium">Predictions submitted:</span>
                         <span className="font-bold text-amber-400 px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 font-mono">
-                          {activePredictions.filter(p => p.matchId === match.id).length} {isLoadingPreds ? 'Loading...' : 'Completed'}
+                          {getMatchPreds(match.id).length} {isLoadingPreds && !matchPredictions[match.id] ? 'Loading...' : 'Completed'}
                         </span>
                       </div>
                       
@@ -691,7 +697,7 @@ export const AdminPanel: React.FC = () => {
                           <div className="space-y-1">
                             <span className="text-slate-500 font-bold block uppercase tracking-wider text-[8px]">Predicted Members:</span>
                             {(() => {
-                              const matchPreds = activePredictions.filter(p => p.matchId === match.id);
+                              const matchPreds = getMatchPreds(match.id);
                               if (matchPreds.length === 0) {
                                 return <span className="text-slate-500 italic block pl-1">No one has predicted yet.</span>;
                               }
@@ -700,7 +706,7 @@ export const AdminPanel: React.FC = () => {
                                   {matchPreds.map(p => (
                                     <div key={p.id} className="flex justify-between items-center bg-slate-900/60 px-2 py-1 rounded border border-slate-800 text-slate-300">
                                       <span className="truncate max-w-[110px] font-medium" title={p.displayName}>{p.displayName}</span>
-                                      <span className="font-bold text-amber-300 bg-slate-950 border border-slate-850 px-1 py-0.2 rounded font-mono">
+                                      <span className="font-bold text-amber-300 bg-slate-950 border border-slate-850 px-1 py-0.5 rounded font-mono">
                                         {p.homePredicted} - {p.awayPredicted}
                                         {match.stage !== MatchStage.GROUP_STAGE && p.homePredicted === p.awayPredicted && p.shootoutWinner && (
                                           <span className="text-[7px] text-indigo-400 ml-0.5" title={p.shootoutWinner}>
@@ -719,7 +725,8 @@ export const AdminPanel: React.FC = () => {
                           <div className="space-y-1">
                             <span className="text-slate-500 font-bold block uppercase tracking-wider text-[8px]">Awaiting Predictions:</span>
                             {(() => {
-                              const matchPredUsers = new Set(activePredictions.filter(p => p.matchId === match.id).map(p => p.userId));
+                              const matchPreds = getMatchPreds(match.id);
+                              const matchPredUsers = new Set(matchPreds.map(p => p.userId));
                               const awaitingUsers = leaderboard.filter(u => !matchPredUsers.has(u.uid));
                               if (awaitingUsers.length === 0) {
                                 return <span className="text-emerald-500 font-medium block pl-1">★ Everyone has predicted!</span>;
@@ -796,7 +803,7 @@ export const AdminPanel: React.FC = () => {
                           <span className="text-[9px] font-bold text-indigo-400 uppercase">⚡ Assign Shootout Winner</span>
                           <div className="flex gap-1.5">
                             <button
-                              type="button; cursor: pointer"
+                              type="button"
                               onClick={() => handleShootoutWinnerChange(match.id, 'home')}
                               className={`px-2 py-1 text-[10px] font-bold rounded-md border cursor-pointer select-none truncate max-w-[100px] transition ${
                                 currentEdit.shootoutWinner === 'home'
@@ -808,7 +815,7 @@ export const AdminPanel: React.FC = () => {
                               Home SO
                             </button>
                             <button
-                              type="button; cursor: pointer"
+                              type="button"
                               onClick={() => handleShootoutWinnerChange(match.id, 'away')}
                               className={`px-2 py-1 text-[10px] font-bold rounded-md border cursor-pointer select-none truncate max-w-[100px] transition ${
                                 currentEdit.shootoutWinner === 'away'

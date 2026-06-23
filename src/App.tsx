@@ -79,7 +79,7 @@ const GameLayout: React.FC = () => {
             <button
               onClick={() => setActiveTab('leaderboard')}
               className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold tracking-wide transition cursor-pointer ${
-                activeTab === 'leaderboard' ? 'bg-slate-800 text-amber-400' : 'text-slate-400 hover:text-white hover:bg-slate-880/40'
+                activeTab === 'leaderboard' ? 'bg-slate-800 text-amber-400' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
               }`}
             >
               <Award className="w-4 h-4" /> Leaderboard
@@ -257,7 +257,7 @@ const GameLayout: React.FC = () => {
       </main>
 
       {/* Footer Branding credits */}
-      <footer className="bg-slate-950/80 p-6 text-center border-t border-slate-905 select-none mt-12">
+      <footer className="bg-slate-950/80 p-6 text-center border-t border-slate-900 select-none mt-12">
         <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono font-medium">
           TML Brothers Prediction Game © 2026. Built with extreme craft and attention to detail.
         </span>

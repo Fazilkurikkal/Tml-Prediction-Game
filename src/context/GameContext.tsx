@@ -38,7 +38,9 @@ import {
   where,
   onSnapshot,
   writeBatch,
-  increment
+  increment,
+  orderBy,
+  limit
 } from 'firebase/firestore';
 
 interface GameContextProps {
@@ -82,6 +84,16 @@ const ADMIN_EMAIL = 'mm9975775@gmail.com';
 
 // Shadow global localStorage to use sandboxed safeStorage
 const localStorage = safeStorage;
+
+const safeParse = <T,>(str: string | null, fallback: T): T => {
+  if (!str) return fallback;
+  try {
+    return JSON.parse(str) as T;
+  } catch (e) {
+    console.error("Failed to parse JSON safely, using fallback:", e);
+    return fallback;
+  }
+};
 
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -128,33 +140,117 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     { uid: ADMIN_EMAIL, email: ADMIN_EMAIL, displayName: 'Admin Mo (TML)', totalPoints: 15, exactScoresCount: 4, correctOutcomesCount: 3, isAdmin: true }
   ];
 
+  const logQueryPerformance = (collectionName: string, docCount: number, startTime: number) => {
+    const timeTaken = Date.now() - startTime;
+    console.log(`[Firestore Performance Log] Collection "${collectionName}" fetched. Count: ${docCount} documents. Time taken: ${timeTaken}ms.`);
+  };
+
+  const regenerateLeaderboardCollection = async (firestoreDb: any) => {
+    try {
+      const startTime = Date.now();
+      const usersRef = collection(firestoreDb, 'users');
+      const snapshot = await getDocs(usersRef);
+      const users: UserProfile[] = [];
+      snapshot.forEach((docSnap) => {
+        const u = docSnap.data() as UserProfile;
+        if (!u.isAdmin) {
+          users.push(u);
+        }
+      });
+
+      // Sort by points desc
+      users.sort((a, b) => b.totalPoints - a.totalPoints || (a.displayName || '').localeCompare(b.displayName || ''));
+
+      const batch = writeBatch(firestoreDb);
+      const leaderboardRef = collection(firestoreDb, 'leaderboard');
+
+      users.forEach((user, index) => {
+        const rank = index + 1;
+        const userDocRef = doc(leaderboardRef, user.uid);
+        batch.set(userDocRef, {
+          uid: user.uid,
+          displayName: user.displayName,
+          points: user.totalPoints,
+          totalPoints: user.totalPoints,
+          rank: rank,
+          lastUpdated: new Date().toISOString(),
+          exactScoresCount: user.exactScoresCount || 0,
+          correctOutcomesCount: user.correctOutcomesCount || 0,
+          email: user.email || ''
+        });
+      });
+
+      await batch.commit();
+      logQueryPerformance('leaderboard (regenerate)', users.length, startTime);
+    } catch (error) {
+      console.error("Error regenerating leaderboard collection:", error);
+    }
+  };
+
   // Helper to load Leaderboard once (Massive read-saving optimization!)
   const loadLeaderboardData = async (customUserArg?: UserProfile | null) => {
     if (!isFirebase || !db) return;
+    const startTime = Date.now();
     try {
-      const usersRef = collection(db, 'users');
-      const snapshot = await getDocsFromServer(usersRef);
-      const uList: UserProfile[] = [];
-      const fullList: UserProfile[] = [];
-      snapshot.forEach((doc) => {
-        const u = doc.data() as UserProfile;
-        const enforcedAdmin = u.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
-        const correctedUser = { ...u, isAdmin: enforcedAdmin };
-        fullList.push(correctedUser);
-        if (!enforcedAdmin) {
-          uList.push(correctedUser);
+      let uList: UserProfile[] = [];
+      try {
+        const leaderboardQuery = query(
+          collection(db, 'leaderboard'),
+          limit(100)
+        );
+        const snapshot = await getDocs(leaderboardQuery);
+        snapshot.forEach((doc) => {
+          const lData = doc.data();
+          uList.push({
+            uid: lData.uid,
+            displayName: lData.displayName,
+            email: lData.email || '',
+            totalPoints: lData.points !== undefined ? lData.points : (lData.totalPoints || 0),
+            exactScoresCount: lData.exactScoresCount || 0,
+            correctOutcomesCount: lData.correctOutcomesCount || 0,
+            isAdmin: false,
+            rank: lData.rank || 1
+          } as UserProfile);
+        });
+        uList.sort((a, b) => a.rank - b.rank);
+      } catch (err) {
+        console.warn("Leaderboard direct read failed, attempting collection fallback to users:", err);
+        try {
+          const usersRef = collection(db, 'users');
+          const usersSnap = await getDocs(usersRef);
+          const rawUsers: UserProfile[] = [];
+          usersSnap.forEach((docSnap) => {
+            const u = docSnap.data() as UserProfile;
+            if (!u.isAdmin) {
+              rawUsers.push(u);
+            }
+          });
+          rawUsers.sort((a, b) => b.totalPoints - a.totalPoints || (a.displayName || '').localeCompare(b.displayName || ''));
+          uList = rawUsers.slice(0, 100).map((u, i) => ({
+            ...u,
+            rank: i + 1
+          }));
+        } catch (fallbackErr) {
+          console.error("Leaderboard fallback failed too:", fallbackErr);
+          throw err;
         }
-      });
-      uList.sort((a, b) => b.totalPoints - a.totalPoints || a.displayName.localeCompare(b.displayName));
+      }
+
       setLeaderboard(uList);
+      logQueryPerformance('leaderboard', uList.length, startTime);
       
       const activeUser = customUserArg !== undefined ? customUserArg : currentUser;
       const currentId = activeUser?.uid || auth?.currentUser?.uid;
       if (currentId) {
-        const me = fullList.find(u => u.uid === currentId);
-        if (me) {
-          setCurrentUser(me);
-          localStorage.setItem('tml_currentUser', JSON.stringify(me));
+        const userDocRef = doc(db, 'users', currentId);
+        const uSnap = await getDoc(userDocRef);
+        if (uSnap.exists()) {
+          const up = uSnap.data() as UserProfile;
+          const enforcedAdmin = up.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+          const correctedUser = { ...up, isAdmin: enforcedAdmin };
+          setCurrentUser(correctedUser);
+          localStorage.setItem('tml_currentUser', JSON.stringify(correctedUser));
+          logQueryPerformance('users (currentUser)', 1, startTime);
         }
       }
     } catch (error) {
@@ -163,6 +259,31 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         console.error("Error fetching leaderboard once:", error);
       }
+    }
+  };
+
+  const fetchMatchesOnce = async () => {
+    if (!isFirebase || !db) return;
+    const startTime = Date.now();
+    try {
+      const matchesRef = collection(db, 'matches');
+      const matchesSnap = await getDocs(matchesRef);
+      const list: Match[] = [];
+      matchesSnap.forEach((doc) => {
+        list.push({ id: doc.id, ...doc.data() } as Match);
+      });
+      list.sort((a, b) => {
+        if (a.isCustom && !b.isCustom) return -1;
+        if (!a.isCustom && b.isCustom) return 1;
+        if (a.isCustom && b.isCustom) {
+          return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+        }
+        return new Date(a.kickoffTime).getTime() - new Date(b.kickoffTime).getTime();
+      });
+      setMatches(list);
+      logQueryPerformance('matches', list.length, startTime);
+    } catch (error) {
+      console.warn("Error fetching matches once:", error);
     }
   };
 
@@ -191,55 +312,66 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 2. Fetch Leaderboard / Users via one-time getDocs (Optimized!)
       loadLeaderboardData(customUser);
 
+      // Fetch matches once immediately (Task 1)
+      fetchMatchesOnce();
+
+      // Setup a background polling interval of 60 seconds (60000ms) to reload matches as requested (Task 1)
+      const matchesInterval = setInterval(() => {
+        fetchMatchesOnce();
+      }, 60000);
+
       // Setup user-specific subscriptions helper
       const setupPredictionsSubscription = (uid: string, isAdmin: boolean) => {
         unsubscribePredictions();
 
         const predictionsRef = collection(db!, 'predictions');
         // ALWAYS query matches where userId == uid for the persistent dashboard listener.
-        // This is extremely efficient and reduces general/admin footprint from full-table scan.
+        // This is extremely efficient and reduces general/admin footprint from full-table scan (Task 2)
         const predictionsQuery = query(predictionsRef, where('userId', '==', uid));
 
         unsubscribePredictions = onSnapshot(predictionsQuery, (snapshot) => {
+          const startTime = Date.now();
           const predList: Prediction[] = [];
           snapshot.forEach((doc) => {
             predList.push({ id: doc.id, ...doc.data() } as Prediction);
           });
           setPredictions(predList);
+          logQueryPerformance('predictions (realtime user stream)', predList.length, startTime);
         }, (error) => {
           if (checkQuotaError(error)) {
             console.warn("Predictions stream: Firestore Quota Exceeded. Safely fell back to Local Sandbox.");
           } else {
-            console.error("Predictions stream error:", error);
-            handleFirestoreError(error, OperationType.LIST, 'predictions');
+            console.error("Predictions stream error (safely handled):", error);
           }
         });
       };
 
-      const setupUserSubscriptions = (uid: string) => {
-        // Unsubscribe existing userDoc and prediction listeners if any
-        unsubscribeUserDoc();
+      const setupUserSubscriptions = async (uid: string) => {
+        // Unsubscribe existing prediction listeners if any (Task 8 & 2)
         unsubscribePredictions();
 
+        const startTime = Date.now();
         const userDocRef = doc(db!, 'users', uid);
-        unsubscribeUserDoc = onSnapshot(userDocRef, (userSnap) => {
+        try {
+          const userSnap = await getDoc(userDocRef);
           if (userSnap.exists()) {
             const up = userSnap.data() as UserProfile;
             const enforcedAdmin = up.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
             const correctedUser = { ...up, isAdmin: enforcedAdmin };
             setCurrentUser(correctedUser);
             localStorage.setItem('tml_currentUser', JSON.stringify(correctedUser));
-            // Setup predictions based on admin status dynamically
+            logQueryPerformance('users (setupUserSubscriptions)', 1, startTime);
+            
+            // Setup predictions based on admin status dynamically (using single user-specific listener)
             setupPredictionsSubscription(uid, enforcedAdmin);
           }
-        }, (error) => {
+        } catch (error) {
           if (checkQuotaError(error)) {
-            console.warn("UserDoc stream: Firestore Quota Exceeded. Safely fell back to Local Sandbox.");
+            console.warn("User fetch once: Firestore Quota Exceeded.");
           } else {
-            console.error("UserDoc stream error:", error);
-            handleFirestoreError(error, OperationType.LIST, `users/${uid}`);
+            console.error("User fetch once error:", error);
           }
-        });
+        }
       };
 
       // If we initialized a custom-number user on load, active their listeners
@@ -277,6 +409,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   updatedAt: new Date().toISOString()
                 };
                 await setDoc(userDocRef, currentProfile);
+                await regenerateLeaderboardCollection(db!);
               } else {
                 const uData = userDoc.data() as UserProfile;
                 const isUserAdmin = uData.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
@@ -314,6 +447,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         unsubscribeUsers();
         unsubscribeAuth();
         unsubscribeUserDoc();
+        clearInterval(matchesInterval);
       };
     } else {
       // Local Sandbox Mode (No Firebase configuration present)
@@ -325,114 +459,48 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const localLeaderboard = localStorage.getItem('tml_leaderboard');
       const localUser = localStorage.getItem('tml_currentUser');
 
-      if (localMatches) {
-        setMatches(JSON.parse(localMatches));
-      } else {
+      const loadedMatches = safeParse<Match[]>(localMatches, INITIAL_MATCHES);
+      setMatches(loadedMatches);
+      if (!localMatches) {
         localStorage.setItem('tml_matches', JSON.stringify(INITIAL_MATCHES));
-        setMatches(INITIAL_MATCHES);
       }
 
-      if (localPredictions) {
-        setPredictions(JSON.parse(localPredictions));
-      } else {
-        // Pre-create some mock predictions to make it juicy!
-        const defaultPredictions: Prediction[] = [
-          // Argentina vs Saudi Arabia predictions
-          { id: 'user-id-1_wc2026-m01', userId: 'user-id-1', userEmail: 'vibe_coder@tml.com', displayName: 'Vibe Coder 🔥', matchId: 'wc2026-m01', homePredicted: 1, awayPredicted: 2, pointsAwarded: 3, status: PredictionStatus.EXACT_CORRECT, updatedAt: new Date().toISOString() },
-          { id: 'user-id-2_wc2026-m01', userId: 'user-id-2', userEmail: 'brother_tarik@tml.com', displayName: 'Brother Tarik ⚽', matchId: 'wc2026-m01', homePredicted: 3, awayPredicted: 0, pointsAwarded: 0, status: PredictionStatus.INCORRECT, updatedAt: new Date().toISOString() },
-          { id: 'user-id-3_wc2026-m01', userId: 'user-id-3', userEmail: 'brother_mo@tml.com', displayName: 'Brother Mo 🌟', matchId: 'wc2026-m01', homePredicted: 1, awayPredicted: 1, pointsAwarded: 0, status: PredictionStatus.INCORRECT, updatedAt: new Date().toISOString() },
-          // USA vs England predictions
-          { id: 'user-id-1_wc2026-m02', userId: 'user-id-1', userEmail: 'vibe_coder@tml.com', displayName: 'Vibe Coder 🔥', matchId: 'wc2026-m02', homePredicted: 1, awayPredicted: 1, pointsAwarded: 3, status: PredictionStatus.EXACT_CORRECT, updatedAt: new Date().toISOString() },
-          { id: 'user-id-2_wc2026-m02', userId: 'user-id-2', userEmail: 'brother_tarik@tml.com', displayName: 'Brother Tarik ⚽', matchId: 'wc2026-m02', homePredicted: 0, awayPredicted: 2, pointsAwarded: 0, status: PredictionStatus.INCORRECT, updatedAt: new Date().toISOString() },
-          { id: 'user-id-3_wc2026-m02', userId: 'user-id-3', userEmail: 'brother_mo@tml.com', displayName: 'Brother Mo 🌟', matchId: 'wc2026-m02', homePredicted: 2, awayPredicted: 2, pointsAwarded: 1, status: PredictionStatus.WINNER_CORRECT, updatedAt: new Date().toISOString() }
-        ];
+      const defaultPredictions: Prediction[] = [
+        // Argentina vs Saudi Arabia predictions
+        { id: 'user-id-1_wc2026-m01', userId: 'user-id-1', userEmail: 'vibe_coder@tml.com', displayName: 'Vibe Coder 🔥', matchId: 'wc2026-m01', homePredicted: 1, awayPredicted: 2, pointsAwarded: 3, status: PredictionStatus.EXACT_CORRECT, updatedAt: new Date().toISOString() },
+        { id: 'user-id-2_wc2026-m01', userId: 'user-id-2', userEmail: 'brother_tarik@tml.com', displayName: 'Brother Tarik ⚽', matchId: 'wc2026-m01', homePredicted: 3, awayPredicted: 0, pointsAwarded: 0, status: PredictionStatus.INCORRECT, updatedAt: new Date().toISOString() },
+        { id: 'user-id-3_wc2026-m01', userId: 'user-id-3', userEmail: 'brother_mo@tml.com', displayName: 'Brother Mo 🌟', matchId: 'wc2026-m01', homePredicted: 1, awayPredicted: 1, pointsAwarded: 0, status: PredictionStatus.INCORRECT, updatedAt: new Date().toISOString() },
+        // USA vs England predictions
+        { id: 'user-id-1_wc2026-m02', userId: 'user-id-1', userEmail: 'vibe_coder@tml.com', displayName: 'Vibe Coder 🔥', matchId: 'wc2026-m02', homePredicted: 1, awayPredicted: 1, pointsAwarded: 3, status: PredictionStatus.EXACT_CORRECT, updatedAt: new Date().toISOString() },
+        { id: 'user-id-2_wc2026-m02', userId: 'user-id-2', userEmail: 'brother_tarik@tml.com', displayName: 'Brother Tarik ⚽', matchId: 'wc2026-m02', homePredicted: 0, awayPredicted: 2, pointsAwarded: 0, status: PredictionStatus.INCORRECT, updatedAt: new Date().toISOString() },
+        { id: 'user-id-3_wc2026-m02', userId: 'user-id-3', userEmail: 'brother_mo@tml.com', displayName: 'Brother Mo 🌟', matchId: 'wc2026-m02', homePredicted: 2, awayPredicted: 2, pointsAwarded: 1, status: PredictionStatus.WINNER_CORRECT, updatedAt: new Date().toISOString() }
+      ];
+      const loadedPredictions = safeParse<Prediction[]>(localPredictions, defaultPredictions);
+      setPredictions(loadedPredictions);
+      if (!localPredictions) {
         localStorage.setItem('tml_predictions', JSON.stringify(defaultPredictions));
-        setPredictions(defaultPredictions);
       }
 
-      if (localLeaderboard) {
-        const rawLeaderboard = JSON.parse(localLeaderboard) as UserProfile[];
-        const filteredLeaderboard = rawLeaderboard.filter(u => !u.isAdmin);
-        filteredLeaderboard.sort((a, b) => b.totalPoints - a.totalPoints || a.displayName.localeCompare(b.displayName));
-        setLeaderboard(filteredLeaderboard);
-      } else {
+      const loadedLeaderboard = safeParse<UserProfile[]>(localLeaderboard, defaultMockLeaderboard);
+      const filteredLeaderboard = loadedLeaderboard.filter(u => !u.isAdmin);
+      filteredLeaderboard.sort((a, b) => b.totalPoints - a.totalPoints || (a.displayName || '').localeCompare(b.displayName || ''));
+      setLeaderboard(filteredLeaderboard);
+      if (!localLeaderboard) {
         localStorage.setItem('tml_leaderboard', JSON.stringify(defaultMockLeaderboard));
-        const filteredLeaderboard = defaultMockLeaderboard.filter(u => !u.isAdmin);
-        filteredLeaderboard.sort((a, b) => b.totalPoints - a.totalPoints || a.displayName.localeCompare(b.displayName));
-        setLeaderboard(filteredLeaderboard);
       }
 
-      if (localUser) {
-        setCurrentUser(JSON.parse(localUser));
-      } else {
-        // Auto-login to Admin by default in Local Sandbox mode so they can play with the panel!
-        const defaultAdmin = defaultMockLeaderboard.find(u => u.uid === ADMIN_EMAIL) || defaultMockLeaderboard[3];
+      const defaultAdmin = defaultMockLeaderboard.find(u => u.uid === ADMIN_EMAIL) || defaultMockLeaderboard[3];
+      const loadedUser = safeParse<UserProfile | null>(localUser, defaultAdmin);
+      setCurrentUser(loadedUser);
+      if (!localUser && defaultAdmin) {
         localStorage.setItem('tml_currentUser', JSON.stringify(defaultAdmin));
-        setCurrentUser(defaultAdmin);
       }
 
       setIsLoading(false);
     }
   }, [isFirebase]);
 
-  // Dynamic real-time matches subscription (optimized based on user role)
-  useEffect(() => {
-    let unsubscribeMatches: () => void = () => {};
- 
-    if (isFirebase && db) {
-      const matchesRef = collection(db, 'matches');
-      let matchesQuery;
- 
-      if (currentUser?.isAdmin) {
-        // Admins subscribe to all matches to manage and score them
-        matchesQuery = query(matchesRef);
-      } else if (activeStage === 'Unfinished') {
-        // Players only subscribe to unfinished matches to reduce read rate loads dramatically!
-        matchesQuery = query(
-          matchesRef,
-          where('status', 'in', [MatchStatus.OPEN, MatchStatus.LOCKED])
-        );
-      } else {
-        // Players query specific stage to load them on demand!
-        matchesQuery = query(
-          matchesRef,
-          where('stage', '==', activeStage)
-        );
-      }
- 
-      unsubscribeMatches = onSnapshot(matchesQuery, (snapshot) => {
-        const list: Match[] = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          list.push({ id: doc.id, ...data } as Match);
-        });
- 
-        // Sort Matches: newly created (isCustom) on top, otherwise by kickoffTime
-        list.sort((a, b) => {
-          if (a.isCustom && !b.isCustom) return -1;
-          if (!a.isCustom && b.isCustom) return 1;
-          if (a.isCustom && b.isCustom) {
-            return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
-          }
-          return new Date(a.kickoffTime).getTime() - new Date(b.kickoffTime).getTime();
-        });
- 
-        setMatches(list);
-        setIsLoading(false);
-      }, (error) => {
-        if (checkQuotaError(error)) {
-          console.warn("Match stream: Firestore Quota Exceeded. Safely fell back to Local Sandbox.");
-        } else {
-          console.error("Match stream error:", error);
-          handleFirestoreError(error, OperationType.LIST, 'matches');
-        }
-      });
-    }
- 
-    return () => {
-      unsubscribeMatches();
-    };
-  }, [isFirebase, currentUser?.isAdmin, activeStage]);
+
 
   // Login handler
   const login = async (numberInput: string, pass: string) => {
@@ -497,6 +565,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setCurrentUser(profile);
           
           // Force refresh context predictions immediately
+          const pStartTime = Date.now();
           const predictionsRef = collection(db, 'predictions');
           const myPredictionsQuery = query(predictionsRef, where('userId', '==', profile.uid));
           const predsSnap = await getDocs(myPredictionsQuery);
@@ -505,6 +574,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             predList.push({ id: doc.id, ...doc.data() } as Prediction);
           });
           setPredictions(predList);
+          logQueryPerformance('predictions (login)', predList.length, pStartTime);
         } catch (dbErr: any) {
           if (checkQuotaError(dbErr)) {
             useFirebase = false;
@@ -517,7 +587,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!useFirebase) {
         // Sandbox login
         const existingUsers: UserProfile[] = JSON.parse(localStorage.getItem('tml_leaderboard') || '[]');
-        let user = existingUsers.find(u => u.email.toLowerCase() === cleanNumber.toLowerCase());
+        let user = existingUsers.find(u => (u.email || '').toLowerCase() === cleanNumber.toLowerCase());
         
         if (!user) {
           // Create user on-the-fly for seamless sandbox sandbox login if they entered details
@@ -590,6 +660,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           
           // Save user profile state
           await setDoc(doc(db, 'users', uid), newProfile);
+          await regenerateLeaderboardCollection(db);
           
           localStorage.setItem('tml_currentUser', JSON.stringify(newProfile));
           setCurrentUser(newProfile);
@@ -608,7 +679,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const existingUsers: UserProfile[] = JSON.parse(localStorage.getItem('tml_leaderboard') || '[]');
         const isUserAdmin = cleanNumber.toLowerCase() === ADMIN_EMAIL.toLowerCase();
         
-        if (existingUsers.some(u => u.email.toLowerCase() === cleanNumber.toLowerCase())) {
+        if (existingUsers.some(u => (u.email || '').toLowerCase() === cleanNumber.toLowerCase())) {
           throw new Error("This number is already in use in the sandbox database!");
         }
 
@@ -626,7 +697,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem('tml_leaderboard', JSON.stringify(existingUsers));
         const filteredAndSorted = existingUsers
           .filter(u => !u.isAdmin)
-          .sort((a, b) => b.totalPoints - a.totalPoints || a.displayName.localeCompare(b.displayName));
+          .sort((a, b) => b.totalPoints - a.totalPoints || (a.displayName || '').localeCompare(b.displayName || ''));
         setLeaderboard(filteredAndSorted);
         
         localStorage.setItem('tml_currentUser', JSON.stringify(newUser));
@@ -665,6 +736,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
           }
         }
+        await regenerateLeaderboardCollection(db);
         await loadLeaderboardData();
       } catch (err) {
         console.error("Failed to update profile name:", err);
@@ -682,7 +754,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem('tml_leaderboard', JSON.stringify(updatedUsers));
       const filteredAndSorted = updatedUsers
         .filter(u => !u.isAdmin)
-        .sort((a, b) => b.totalPoints - a.totalPoints || a.displayName.localeCompare(b.displayName));
+        .sort((a, b) => b.totalPoints - a.totalPoints || (a.displayName || '').localeCompare(b.displayName || ''));
       setLeaderboard(filteredAndSorted);
 
       const updatedMe = { ...currentUser, displayName: cleanName };
@@ -897,6 +969,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         await batch.commit();
+        await regenerateLeaderboardCollection(db);
         await loadLeaderboardData();
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, `matches/${matchId}`);
@@ -978,7 +1051,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setMatches(currentMatches);
       setPredictions(currentPredictions);
       const filteredProfiles = currentProfiles.filter(u => !u.isAdmin);
-      filteredProfiles.sort((a, b) => b.totalPoints - a.totalPoints || a.displayName.localeCompare(b.displayName));
+      filteredProfiles.sort((a, b) => b.totalPoints - a.totalPoints || (a.displayName || '').localeCompare(b.displayName || ''));
       setLeaderboard(filteredProfiles);
 
       // Update current user references if we updated them
@@ -1045,6 +1118,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
 
         await batch.commit();
+        await regenerateLeaderboardCollection(db);
+        await loadLeaderboardData();
         console.log("Seeding in Firestore complete!");
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, 'matches');
@@ -1057,7 +1132,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setMatches(INITIAL_MATCHES);
       const filteredLeaderboard = defaultMockLeaderboard.filter(u => !u.isAdmin);
-      filteredLeaderboard.sort((a, b) => b.totalPoints - a.totalPoints || a.displayName.localeCompare(b.displayName));
+      filteredLeaderboard.sort((a, b) => b.totalPoints - a.totalPoints || (a.displayName || '').localeCompare(b.displayName || ''));
       setLeaderboard(filteredLeaderboard);
       setPredictions([]);
       
@@ -1154,6 +1229,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
 
         await batch.commit();
+        await regenerateLeaderboardCollection(db);
+        await loadLeaderboardData();
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, 'matches');
       }
@@ -1175,7 +1252,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setPredictions([]);
       const filteredAndSorted = resetLeaderboard
         .filter(u => !u.isAdmin)
-        .sort((a, b) => b.totalPoints - a.totalPoints || a.displayName.localeCompare(b.displayName));
+        .sort((a, b) => b.totalPoints - a.totalPoints || (a.displayName || '').localeCompare(b.displayName || ''));
       setLeaderboard(filteredAndSorted);
 
       const me = resetLeaderboard.find(u => u.uid === currentUser?.uid);
@@ -1198,7 +1275,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshData = async () => {
     setIsLoading(true);
-    if (isFirebase && db && auth.currentUser) {
+    if (isFirebase && db && auth?.currentUser) {
       try {
         // Force get matches
         const matchesRef = collection(db, 'matches');
@@ -1232,9 +1309,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             uList.push(u);
           }
         });
-        uList.sort((a, b) => b.totalPoints - a.totalPoints || a.displayName.localeCompare(b.displayName));
+        uList.sort((a, b) => b.totalPoints - a.totalPoints || (a.displayName || '').localeCompare(b.displayName || ''));
         setLeaderboard(uList);
-        const me = fullList.find(u => u.uid === auth.currentUser?.uid);
+        const me = fullList.find(u => u.uid === auth?.currentUser?.uid);
         if (me) {
           setCurrentUser(me);
         }
@@ -1244,7 +1321,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const isUserAdmin = me?.isAdmin || currentUser?.isAdmin;
         const predictionsQuery = isUserAdmin
           ? query(predictionsRef)
-          : query(predictionsRef, where('userId', '==', auth.currentUser.uid));
+          : query(predictionsRef, where('userId', '==', auth?.currentUser?.uid || ''));
         const predsSnap = await getDocs(predictionsQuery);
         const predList: Prediction[] = [];
         predsSnap.forEach((doc) => {
@@ -1264,15 +1341,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const localLeaderboard = localStorage.getItem('tml_leaderboard');
       const localUser = localStorage.getItem('tml_currentUser');
 
-      if (localMatches) setMatches(JSON.parse(localMatches));
-      if (localPredictions) setPredictions(JSON.parse(localPredictions));
-      if (localLeaderboard) {
-        const parsed = JSON.parse(localLeaderboard) as UserProfile[];
-        const filtered = parsed.filter(u => !u.isAdmin);
-        filtered.sort((a, b) => b.totalPoints - a.totalPoints || a.displayName.localeCompare(b.displayName));
-        setLeaderboard(filtered);
+      setMatches(safeParse<Match[]>(localMatches, matches));
+      setPredictions(safeParse<Prediction[]>(localPredictions, predictions));
+      
+      const parsed = safeParse<UserProfile[]>(localLeaderboard, []);
+      const filtered = parsed.filter(u => !u.isAdmin);
+      filtered.sort((a, b) => b.totalPoints - a.totalPoints || (a.displayName || '').localeCompare(b.displayName || ''));
+      setLeaderboard(filtered);
+      
+      const parsedUser = safeParse<UserProfile | null>(localUser, currentUser);
+      if (parsedUser) {
+        setCurrentUser(parsedUser);
       }
-      if (localUser) setCurrentUser(JSON.parse(localUser));
       setTimeout(() => setIsLoading(false), 300);
     }
   };
