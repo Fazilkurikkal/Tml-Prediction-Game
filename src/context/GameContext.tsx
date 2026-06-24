@@ -289,7 +289,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Load and subscribe to database (Firebase or LocalStorage)
   useEffect(() => {
-    let unsubscribePredictions: () => void = () => {};
     let unsubscribeUsers: () => void = () => {};
     let unsubscribeAuth: () => void = () => {};
     let unsubscribeUserDoc: () => void = () => {};
@@ -320,36 +319,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         fetchMatchesOnce();
       }, 60000);
 
-      // Setup user-specific subscriptions helper
-      const setupPredictionsSubscription = (uid: string, isAdmin: boolean) => {
-        unsubscribePredictions();
-
-        const predictionsRef = collection(db!, 'predictions');
-        // ALWAYS query matches where userId == uid for the persistent dashboard listener.
-        // This is extremely efficient and reduces general/admin footprint from full-table scan (Task 2)
-        const predictionsQuery = query(predictionsRef, where('userId', '==', uid));
-
-        unsubscribePredictions = onSnapshot(predictionsQuery, (snapshot) => {
-          const startTime = Date.now();
-          const predList: Prediction[] = [];
-          snapshot.forEach((doc) => {
-            predList.push({ id: doc.id, ...doc.data() } as Prediction);
-          });
-          setPredictions(predList);
-          logQueryPerformance('predictions (realtime user stream)', predList.length, startTime);
-        }, (error) => {
-          if (checkQuotaError(error)) {
-            console.warn("Predictions stream: Firestore Quota Exceeded. Safely fell back to Local Sandbox.");
-          } else {
-            console.error("Predictions stream error (safely handled):", error);
-          }
-        });
-      };
-
       const setupUserSubscriptions = async (uid: string) => {
-        // Unsubscribe existing prediction listeners if any (Task 8 & 2)
-        unsubscribePredictions();
-
         const startTime = Date.now();
         const userDocRef = doc(db!, 'users', uid);
         try {
@@ -361,9 +331,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setCurrentUser(correctedUser);
             localStorage.setItem('tml_currentUser', JSON.stringify(correctedUser));
             logQueryPerformance('users (setupUserSubscriptions)', 1, startTime);
-            
-            // Setup predictions based on admin status dynamically (using single user-specific listener)
-            setupPredictionsSubscription(uid, enforcedAdmin);
           }
         } catch (error) {
           if (checkQuotaError(error)) {
@@ -371,6 +338,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           } else {
             console.error("User fetch once error:", error);
           }
+        } finally {
+          setIsLoading(false);
         }
       };
 
@@ -438,12 +407,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setCurrentUser(null);
               setPredictions([]);
             }
+            if (!customUser) {
+              setIsLoading(false);
+            }
           }
         });
       }
 
       return () => {
-        unsubscribePredictions();
         unsubscribeUsers();
         unsubscribeAuth();
         unsubscribeUserDoc();
@@ -499,6 +470,46 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoading(false);
     }
   }, [isFirebase]);
+
+  // Realtime predictions active database subscription reacting to currentUser?.uid changes
+  useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+
+    if (isFirebase && db && currentUser?.uid) {
+      const predictionsRef = collection(db, 'predictions');
+      // ALWAYS query matches where userId == uid for the persistent dashboard listener.
+      const predictionsQuery = query(predictionsRef, where('userId', '==', currentUser.uid));
+
+      unsubscribe = onSnapshot(predictionsQuery, (snapshot) => {
+        const startTime = Date.now();
+        const predList: Prediction[] = [];
+        snapshot.forEach((doc) => {
+          predList.push({ id: doc.id, ...doc.data() } as Prediction);
+        });
+        setPredictions(predList);
+        logQueryPerformance('predictions (realtime reactive stream)', predList.length, startTime);
+      }, (error) => {
+        if (checkQuotaError(error)) {
+          console.warn("Predictions stream: Firestore Quota Exceeded.");
+        } else {
+          console.error("Predictions stream error:", error);
+        }
+      });
+    } else if (!isFirebase) {
+      // Sandbox mode / local storage updates
+      const localPredictions = localStorage.getItem('tml_predictions');
+      setPredictions(safeParse<Prediction[]>(localPredictions, []));
+    } else {
+      // Firebase but no current user logged in
+      setPredictions([]);
+    }
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [currentUser?.uid, isFirebase]);
 
 
 
@@ -1275,7 +1286,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshData = async () => {
     setIsLoading(true);
-    if (isFirebase && db && auth?.currentUser) {
+    if (isFirebase && db && (auth?.currentUser || currentUser)) {
       try {
         // Force get matches
         const matchesRef = collection(db, 'matches');
@@ -1311,7 +1322,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
         uList.sort((a, b) => b.totalPoints - a.totalPoints || (a.displayName || '').localeCompare(b.displayName || ''));
         setLeaderboard(uList);
-        const me = fullList.find(u => u.uid === auth?.currentUser?.uid);
+        const activeUid = currentUser?.uid || auth?.currentUser?.uid;
+        const me = fullList.find(u => u.uid === activeUid);
         if (me) {
           setCurrentUser(me);
         }
@@ -1321,7 +1333,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const isUserAdmin = me?.isAdmin || currentUser?.isAdmin;
         const predictionsQuery = isUserAdmin
           ? query(predictionsRef)
-          : query(predictionsRef, where('userId', '==', auth?.currentUser?.uid || ''));
+          : query(predictionsRef, where('userId', '==', activeUid || ''));
         const predsSnap = await getDocs(predictionsQuery);
         const predList: Prediction[] = [];
         predsSnap.forEach((doc) => {

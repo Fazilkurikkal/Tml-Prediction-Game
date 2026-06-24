@@ -35,9 +35,15 @@ async function exportAll() {
       const documents: any[] = [];
       
       querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (collName === 'credentials') {
+          if (data.password) {
+            data.password = '[REDACTED_FOR_SECURITY]';
+          }
+        }
         documents.push({
           _id: doc.id,
-          ...doc.data()
+          ...data
         });
       });
       

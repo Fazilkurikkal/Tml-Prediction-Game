@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Match, MatchStatus, Prediction, PredictionStatus } from '../types';
 import { useGame } from '../context/GameContext';
 import { Lock, Check, Clock, Eye, EyeOff, ShieldCheck, Star, XCircle } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion } from 'framer-motion';
 
 export const MatchCard: React.FC<{ match: Match }> = ({ match }) => {
   const { currentUser, predictions, savePrediction } = useGame();

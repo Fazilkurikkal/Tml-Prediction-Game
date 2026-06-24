@@ -3,7 +3,7 @@ import { useGame } from '../context/GameContext';
 import { MatchCard } from './MatchCard';
 import { MatchStage, MatchStatus } from '../types';
 import { Trophy, Star, CircleAlert, Flame, CircleCheckBig, Layers, RefreshCw } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion } from 'framer-motion';
 
 export const Dashboard: React.FC = () => {
   const { matches, predictions, currentUser, refreshData, activeStage, setActiveStage } = useGame();

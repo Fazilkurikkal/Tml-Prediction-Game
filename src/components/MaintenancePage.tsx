@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 import { Trophy, Wrench, ShieldAlert, Database, RefreshCw, Sparkles, Settings } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export interface MaintenancePageProps {
   onUnlockAdmin?: () => void;

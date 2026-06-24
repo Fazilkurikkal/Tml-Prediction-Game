@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useGame } from '../context/GameContext';
 import { MatchStatus, Match, MatchStage, Prediction } from '../types';
 import { ShieldCheck, PlusCircle, RotateCcw, AlertTriangle, HelpCircle, Save, CheckCircle, Database, Trash2 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion } from 'framer-motion';
 import { db } from '../firebase';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 

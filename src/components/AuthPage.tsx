@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 import { Trophy, Mail, Lock, User, Sparkles, ChevronRight } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export const AuthPage: React.FC = () => {
   const { loginWithGoogle, login, signUp, isFirebase, toggleFirebaseMode, cloudQuotaExceeded, resetCloudDatabaseAttempt } = useGame();

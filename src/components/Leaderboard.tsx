@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useGame } from '../context/GameContext';
 import { Trophy, Star, CircleCheckBig, Search, ShieldAlert, Award, ChevronRight, X, Clock, AlertCircle } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { MatchStatus, Prediction, UserProfile, PredictionStatus, Match } from '../types';
 import { db } from '../firebase';
 import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
